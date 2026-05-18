@@ -460,8 +460,12 @@ ngx_http_xquic_header_filter(ngx_http_request_t *r)
     /* server */
     if (r->headers_out.server == NULL) {
 #if (T_NGX_SERVER_INFO)
-        if (clcf->server_tag_type != NGX_HTTP_SERVER_TAG_OFF) {
+        if (clcf->server_tag_type == NGX_HTTP_SERVER_TAG_OFF) {
+            /* no Server header */
+
+        } else
 #endif
+        {
             h = ngx_list_push(&r->headers_out.headers);
             if (h == NULL) {
                 return NGX_ERROR;
@@ -469,12 +473,14 @@ ngx_http_xquic_header_filter(ngx_http_request_t *r)
 
             h->hash = 1;
             ngx_str_set(&h->key, NGX_HTTP_XQUIC_NAME_SERVER);
+
 #if (T_NGX_SERVER_INFO)
             if (clcf->server_tag_type == NGX_HTTP_SERVER_TAG_CUSTOMIZED) {
                 h->value = clcf->server_tag;
 
-            } else {
+            } else
 #endif
+            {
                 if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_ON) {
 #if (T_NGX_SERVER_INFO)
                     ngx_str_set(&h->value, TENGINE_VER);
@@ -490,13 +496,10 @@ ngx_http_xquic_header_filter(ngx_http_request_t *r)
                 } else {
                     ngx_str_set(&h->value, TENGINE);
                 }
-#if (T_NGX_SERVER_INFO)
             }
-#endif
+
             r->headers_out.server = h;
-#if (T_NGX_SERVER_INFO)
         }
-#endif
     }
 
     /* date */

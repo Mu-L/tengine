@@ -274,8 +274,15 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
 
     if (r->headers_out.server == NULL) {
 #if (T_NGX_SERVER_INFO)
-        if (clcf->server_tag_type == NGX_HTTP_SERVER_TAG_ON) {
+        if (clcf->server_tag_type == NGX_HTTP_SERVER_TAG_OFF) {
+            /* no Server header */
+
+        } else if (clcf->server_tag_type == NGX_HTTP_SERVER_TAG_CUSTOMIZED) {
+            len += 1 + NGX_HTTP_V2_INT_OCTETS + clcf->server_tag.len;
+
+        } else
 #endif
+        {
             if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_ON) {
                 len += 1 + nginx_ver_len;
 
@@ -285,12 +292,7 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
             } else {
                 len += 1 + sizeof(nginx);
             }
-#if (T_NGX_SERVER_INFO)
-        } else if (clcf->server_tag_type == NGX_HTTP_SERVER_TAG_CUSTOMIZED) {
-            len += 1 + NGX_HTTP_V2_INT_OCTETS + clcf->server_tag.len;
         }
-        /* NGX_HTTP_SERVER_TAG_OFF: no Server header */
-#endif
     }
 
     if (r->headers_out.date == NULL) {
@@ -486,61 +488,9 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
 
     if (r->headers_out.server == NULL) {
 #if (T_NGX_SERVER_INFO)
-        if (clcf->server_tag_type == NGX_HTTP_SERVER_TAG_ON) {
-#endif
+        if (clcf->server_tag_type == NGX_HTTP_SERVER_TAG_OFF) {
+            /* no Server header */
 
-        if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_ON) {
-            ngx_log_debug1(NGX_LOG_DEBUG_HTTP, fc->log, 0,
-                           "http2 output header: \"server: %s\"",
-                           NGINX_VER);
-
-        } else if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_BUILD) {
-            ngx_log_debug1(NGX_LOG_DEBUG_HTTP, fc->log, 0,
-                           "http2 output header: \"server: %s\"",
-                           NGINX_VER_BUILD);
-
-        } else {
-            ngx_log_debug0(NGX_LOG_DEBUG_HTTP, fc->log, 0,
-                           "http2 output header: \"server: nginx\"");
-        }
-
-        *pos++ = ngx_http_v2_inc_indexed(NGX_HTTP_V2_SERVER_INDEX);
-
-        if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_ON) {
-            if (nginx_ver[0] == '\0') {
-#if (T_NGX_SERVER_INFO)
-                p = ngx_http_v2_write_value(nginx_ver, (u_char *) TENGINE_VER,
-                                            sizeof(TENGINE_VER) - 1, tmp);
-#else
-                p = ngx_http_v2_write_value(nginx_ver, (u_char *) NGINX_VER,
-                                            sizeof(NGINX_VER) - 1, tmp);
-#endif
-                nginx_ver_len = p - nginx_ver;
-            }
-
-            pos = ngx_cpymem(pos, nginx_ver, nginx_ver_len);
-
-        } else if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_BUILD) {
-            if (nginx_ver_build[0] == '\0') {
-#if (T_NGX_SERVER_INFO)
-                p = ngx_http_v2_write_value(nginx_ver_build,
-                                            (u_char *) TENGINE_VER_BUILD,
-                                            sizeof(TENGINE_VER_BUILD) - 1, tmp);
-#else
-                p = ngx_http_v2_write_value(nginx_ver_build,
-                                            (u_char *) NGINX_VER_BUILD,
-                                            sizeof(NGINX_VER_BUILD) - 1, tmp);
-#endif
-                nginx_ver_build_len = p - nginx_ver_build;
-            }
-
-            pos = ngx_cpymem(pos, nginx_ver_build, nginx_ver_build_len);
-
-        } else {
-            pos = ngx_cpymem(pos, nginx, sizeof(nginx));
-        }
-
-#if (T_NGX_SERVER_INFO)
         } else if (clcf->server_tag_type == NGX_HTTP_SERVER_TAG_CUSTOMIZED) {
             ngx_log_debug1(NGX_LOG_DEBUG_HTTP, fc->log, 0,
                            "http2 output header: \"server: %V\"",
@@ -549,9 +499,61 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
             *pos++ = ngx_http_v2_inc_indexed(NGX_HTTP_V2_SERVER_INDEX);
             pos = ngx_http_v2_write_value(pos, clcf->server_tag.data,
                                           clcf->server_tag.len, tmp);
-        }
-        /* NGX_HTTP_SERVER_TAG_OFF: no Server header */
+
+        } else
 #endif
+        {
+            if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_ON) {
+                ngx_log_debug1(NGX_LOG_DEBUG_HTTP, fc->log, 0,
+                               "http2 output header: \"server: %s\"",
+                               NGINX_VER);
+
+            } else if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_BUILD) {
+                ngx_log_debug1(NGX_LOG_DEBUG_HTTP, fc->log, 0,
+                               "http2 output header: \"server: %s\"",
+                               NGINX_VER_BUILD);
+
+            } else {
+                ngx_log_debug0(NGX_LOG_DEBUG_HTTP, fc->log, 0,
+                               "http2 output header: \"server: nginx\"");
+            }
+
+            *pos++ = ngx_http_v2_inc_indexed(NGX_HTTP_V2_SERVER_INDEX);
+
+            if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_ON) {
+                if (nginx_ver[0] == '\0') {
+#if (T_NGX_SERVER_INFO)
+                    p = ngx_http_v2_write_value(nginx_ver, (u_char *) TENGINE_VER,
+                                                sizeof(TENGINE_VER) - 1, tmp);
+#else
+                    p = ngx_http_v2_write_value(nginx_ver, (u_char *) NGINX_VER,
+                                                sizeof(NGINX_VER) - 1, tmp);
+#endif
+                    nginx_ver_len = p - nginx_ver;
+                }
+
+                pos = ngx_cpymem(pos, nginx_ver, nginx_ver_len);
+
+            } else if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_BUILD) {
+                if (nginx_ver_build[0] == '\0') {
+#if (T_NGX_SERVER_INFO)
+                    p = ngx_http_v2_write_value(nginx_ver_build,
+                                                (u_char *) TENGINE_VER_BUILD,
+                                                sizeof(TENGINE_VER_BUILD) - 1, tmp);
+#else
+                    p = ngx_http_v2_write_value(nginx_ver_build,
+                                                (u_char *) NGINX_VER_BUILD,
+                                                sizeof(NGINX_VER_BUILD) - 1, tmp);
+#endif
+                    nginx_ver_build_len = p - nginx_ver_build;
+                }
+
+                pos = ngx_cpymem(pos, nginx_ver_build, nginx_ver_build_len);
+
+            } else {
+                pos = ngx_cpymem(pos, nginx, sizeof(nginx));
+            }
+        }
     }
 
     if (r->headers_out.date == NULL) {
