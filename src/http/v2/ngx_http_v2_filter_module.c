@@ -273,16 +273,24 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
     clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
     if (r->headers_out.server == NULL) {
+#if (T_NGX_SERVER_INFO)
+        if (clcf->server_tag_type == NGX_HTTP_SERVER_TAG_ON) {
+#endif
+            if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_ON) {
+                len += 1 + nginx_ver_len;
 
-        if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_ON) {
-            len += 1 + nginx_ver_len;
+            } else if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_BUILD) {
+                len += 1 + nginx_ver_build_len;
 
-        } else if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_BUILD) {
-            len += 1 + nginx_ver_build_len;
-
-        } else {
-            len += 1 + sizeof(nginx);
+            } else {
+                len += 1 + sizeof(nginx);
+            }
+#if (T_NGX_SERVER_INFO)
+        } else if (clcf->server_tag_type == NGX_HTTP_SERVER_TAG_CUSTOMIZED) {
+            len += 1 + NGX_HTTP_V2_INT_OCTETS + clcf->server_tag.len;
         }
+        /* NGX_HTTP_SERVER_TAG_OFF: no Server header */
+#endif
     }
 
     if (r->headers_out.date == NULL) {
@@ -477,6 +485,9 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
     }
 
     if (r->headers_out.server == NULL) {
+#if (T_NGX_SERVER_INFO)
+        if (clcf->server_tag_type == NGX_HTTP_SERVER_TAG_ON) {
+#endif
 
         if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_ON) {
             ngx_log_debug1(NGX_LOG_DEBUG_HTTP, fc->log, 0,
@@ -528,6 +539,19 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
         } else {
             pos = ngx_cpymem(pos, nginx, sizeof(nginx));
         }
+
+#if (T_NGX_SERVER_INFO)
+        } else if (clcf->server_tag_type == NGX_HTTP_SERVER_TAG_CUSTOMIZED) {
+            ngx_log_debug1(NGX_LOG_DEBUG_HTTP, fc->log, 0,
+                           "http2 output header: \"server: %V\"",
+                           &clcf->server_tag);
+
+            *pos++ = ngx_http_v2_inc_indexed(NGX_HTTP_V2_SERVER_INDEX);
+            pos = ngx_http_v2_write_value(pos, clcf->server_tag.data,
+                                          clcf->server_tag.len, tmp);
+        }
+        /* NGX_HTTP_SERVER_TAG_OFF: no Server header */
+#endif
     }
 
     if (r->headers_out.date == NULL) {

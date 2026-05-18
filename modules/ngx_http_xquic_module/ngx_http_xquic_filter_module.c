@@ -459,29 +459,44 @@ ngx_http_xquic_header_filter(ngx_http_request_t *r)
 
     /* server */
     if (r->headers_out.server == NULL) {
-        h = ngx_list_push(&r->headers_out.headers);
-        if (h == NULL) {
-            return NGX_ERROR;
-        }
+#if (T_NGX_SERVER_INFO)
+        if (clcf->server_tag_type != NGX_HTTP_SERVER_TAG_OFF) {
+#endif
+            h = ngx_list_push(&r->headers_out.headers);
+            if (h == NULL) {
+                return NGX_ERROR;
+            }
 
-        h->hash = 1;
-        ngx_str_set(&h->key, NGX_HTTP_XQUIC_NAME_SERVER);
-        if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_ON) {
+            h->hash = 1;
+            ngx_str_set(&h->key, NGX_HTTP_XQUIC_NAME_SERVER);
 #if (T_NGX_SERVER_INFO)
-            ngx_str_set(&h->value, TENGINE_VER);
-#else
-            ngx_str_set(&h->value, NGINX_VER);
+            if (clcf->server_tag_type == NGX_HTTP_SERVER_TAG_CUSTOMIZED) {
+                h->value = clcf->server_tag;
+
+            } else {
 #endif
-        } else if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_BUILD) {
+                if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_ON) {
 #if (T_NGX_SERVER_INFO)
-            ngx_str_set(&h->value, TENGINE_VER_BUILD);
+                    ngx_str_set(&h->value, TENGINE_VER);
 #else
-            ngx_str_set(&h->value, NGINX_VER_BUILD);
+                    ngx_str_set(&h->value, NGINX_VER);
 #endif
-        } else {
-            ngx_str_set(&h->value, TENGINE);
+                } else if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_BUILD) {
+#if (T_NGX_SERVER_INFO)
+                    ngx_str_set(&h->value, TENGINE_VER_BUILD);
+#else
+                    ngx_str_set(&h->value, NGINX_VER_BUILD);
+#endif
+                } else {
+                    ngx_str_set(&h->value, TENGINE);
+                }
+#if (T_NGX_SERVER_INFO)
+            }
+#endif
+            r->headers_out.server = h;
+#if (T_NGX_SERVER_INFO)
         }
-        r->headers_out.server = h;
+#endif
     }
 
     /* date */
