@@ -271,11 +271,105 @@ test_chunked(void)
     CHECK(rc == NGX_OK, "chunk: drip with ext+trailer");
 }
 
+/* --- body drain tests ------------------------------------------------- */
+
+/*
+ * These cover the framing-agnostic entry point used both by the parser (over
+ * body bytes that arrived together with the headers) and by the discard handler
+ * (over body bytes that arrive later, across several reads).
+ */
+static void
+test_body_drain(void)
+{
+    ngx_buf_t   b;
+    ngx_uint_t  state;
+    off_t       rem;
+    ngx_int_t   rc;
+    const char *s;
+
+    /* Content-Length fully present in one buffer */
+    s = "0123456789";
+    b.start = b.pos = (u_char *) s;
+    b.last = b.end = (u_char *) s + 10;
+    state = sw_chunk_size;
+    rem = 10;
+    rc = ngx_http_upstream_check_body_drain(&b, 0, &state, &rem);
+    CHECK(rc == NGX_OK, "drain CL: complete -> OK");
+    CHECK(rem == 0, "drain CL: remaining zeroed");
+    CHECK(b.pos == b.last, "drain CL: buffer consumed");
+
+    /* Content-Length of zero completes without consuming anything */
+    s = "";
+    b.start = b.pos = (u_char *) s;
+    b.last = b.end = (u_char *) s;
+    rem = 0;
+    rc = ngx_http_upstream_check_body_drain(&b, 0, &state, &rem);
+    CHECK(rc == NGX_OK, "drain CL: zero-length -> OK");
+
+    /* Content-Length split across two reads, as the discard handler sees it */
+    s = "0123456789";
+    rem = 10;
+    b.start = b.pos = (u_char *) s;
+    b.last = b.end = (u_char *) s + 4;
+    rc = ngx_http_upstream_check_body_drain(&b, 0, &state, &rem);
+    CHECK(rc == NGX_AGAIN, "drain CL: partial -> AGAIN");
+    CHECK(rem == 6, "drain CL: remaining decremented to 6");
+    CHECK(b.pos == b.last, "drain CL: partial buffer consumed");
+
+    b.start = b.pos = (u_char *) s + 4;
+    b.last = b.end = (u_char *) s + 10;
+    rc = ngx_http_upstream_check_body_drain(&b, 0, &state, &rem);
+    CHECK(rc == NGX_OK, "drain CL: rest -> OK");
+    CHECK(rem == 0, "drain CL: remaining zeroed after rest");
+
+    /* bytes past the body are left in the buffer for the caller to notice */
+    s = "0123456789EXTRA";
+    b.start = b.pos = (u_char *) s;
+    b.last = b.end = (u_char *) s + 15;
+    rem = 10;
+    rc = ngx_http_upstream_check_body_drain(&b, 0, &state, &rem);
+    CHECK(rc == NGX_OK, "drain CL: overshoot -> OK");
+    CHECK(b.last - b.pos == 5, "drain CL: 5 bytes left past body");
+
+    /* chunked framing is delegated, single buffer */
+    s = "3\r\nabc\r\n0\r\n\r\n";
+    b.start = b.pos = (u_char *) s;
+    b.last = b.end = (u_char *) s + strlen(s);
+    state = sw_chunk_size;
+    rem = 0;
+    rc = ngx_http_upstream_check_body_drain(&b, 1, &state, &rem);
+    CHECK(rc == NGX_OK, "drain chunked: complete -> OK");
+
+    /* chunked split mid-chunk keeps state across calls */
+    s = "5\r\nhello\r\n0\r\n\r\n";
+    state = sw_chunk_size;
+    rem = 0;
+    b.start = b.pos = (u_char *) s;
+    b.last = b.end = (u_char *) s + 5;
+    rc = ngx_http_upstream_check_body_drain(&b, 1, &state, &rem);
+    CHECK(rc == NGX_AGAIN, "drain chunked: partial -> AGAIN");
+
+    b.start = b.pos = (u_char *) s + 5;
+    b.last = b.end = (u_char *) s + strlen(s);
+    rc = ngx_http_upstream_check_body_drain(&b, 1, &state, &rem);
+    CHECK(rc == NGX_OK, "drain chunked: resumed -> OK");
+
+    /* malformed chunk framing is reported */
+    s = "5\r\nhelloXY\r\n0\r\n\r\n";
+    b.start = b.pos = (u_char *) s;
+    b.last = b.end = (u_char *) s + strlen(s);
+    state = sw_chunk_size;
+    rem = 0;
+    rc = ngx_http_upstream_check_body_drain(&b, 1, &state, &rem);
+    CHECK(rc == NGX_ERROR, "drain chunked: malformed -> ERROR");
+}
+
 int
 main(void)
 {
     test_headers();
     test_chunked();
+    test_body_drain();
 
     printf("\n%d tests, %d failed\n", tests_run, tests_failed);
     return tests_failed == 0 ? 0 : 1;

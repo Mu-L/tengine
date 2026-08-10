@@ -358,4 +358,42 @@ ngx_http_upstream_check_chunked_drain(ngx_buf_t *b, ngx_uint_t *state,
 }
 
 
+/*
+ * Drain response-body bytes from b, whichever framing the response uses, so
+ * that both the initial pass over the buffer that already holds part of the
+ * body and the later passes over freshly-read data go through one code path.
+ * Advances b->pos past everything consumed. Returns:
+ *   NGX_OK    - the body is fully drained; the connection is clean for reuse.
+ *   NGX_AGAIN - more body bytes are still expected.
+ *   NGX_ERROR - malformed chunk framing (chunked only).
+ *
+ * On the first call *remaining must hold the full Content-Length, or, when
+ * chunked is set, *state must be sw_chunk_size and *remaining 0. Both are
+ * carried across calls unchanged by the caller.
+ */
+static ngx_int_t
+ngx_http_upstream_check_body_drain(ngx_buf_t *b, ngx_uint_t chunked,
+    ngx_uint_t *state, off_t *remaining)
+{
+    off_t  avail;
+
+    if (chunked) {
+        return ngx_http_upstream_check_chunked_drain(b, state, remaining);
+    }
+
+    avail = b->last - b->pos;
+
+    if (avail < *remaining) {
+        b->pos = b->last;
+        *remaining -= avail;
+        return NGX_AGAIN;
+    }
+
+    b->pos += (size_t) *remaining;
+    *remaining = 0;
+
+    return NGX_OK;
+}
+
+
 #endif /* _NGX_HTTP_UPSTREAM_CHECK_HTTP_PARSE_H_INCLUDED_ */
