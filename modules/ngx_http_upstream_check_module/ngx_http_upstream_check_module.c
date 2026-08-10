@@ -1795,7 +1795,9 @@ static void
 ngx_http_upstream_check_discard_handler(ngx_event_t *event)
 {
     u_char                          buf[4096];
+    ngx_buf_t                       b;
     ssize_t                         size;
+    ngx_int_t                       rc;
     ngx_connection_t               *c;
     ngx_http_upstream_check_peer_t *peer;
 
@@ -1814,6 +1816,51 @@ ngx_http_upstream_check_discard_handler(ngx_event_t *event)
         size = c->recv(c, buf, 4096);
 
         if (size > 0) {
+            if (!peer->recv_body_pending) {
+                /*
+                 * Nothing is owed on this connection, so whatever arrived is
+                 * unsolicited. Keep discarding it as before.
+                 */
+                continue;
+            }
+
+            /*
+             * Finish draining the response body left over from the last check,
+             * tracking the framing so we know when the connection is clean
+             * again -- that is what lets connect_handler reuse it instead of
+             * reconnecting.
+             */
+            b.start = b.pos = buf;
+            b.last = b.end = buf + size;
+
+            rc = ngx_http_upstream_check_body_drain(&b,
+                                                    peer->recv_body_chunked,
+                                                    &peer->recv_chunk_state,
+                                                    &peer->recv_body_remaining);
+            if (rc == NGX_ERROR) {
+                ngx_log_error(NGX_LOG_ERR, c->log, 0,
+                              "check peer sent a malformed response body, "
+                              "peer: %V ", &peer->check_peer_addr->name);
+                goto check_discard_fail;
+            }
+
+            if (rc == NGX_OK) {
+                peer->recv_body_pending = 0;
+
+                if (b.pos < b.last) {
+                    /*
+                     * Bytes beyond the end of the body: the peer is sending
+                     * something we never asked for, so the socket cannot be
+                     * trusted for the next check.
+                     */
+                    ngx_log_error(NGX_LOG_ERR, c->log, 0,
+                                  "check peer sent %z byte(s) past the response "
+                                  "body, peer: %V ", (ssize_t) (b.last - b.pos),
+                                  &peer->check_peer_addr->name);
+                    goto check_discard_fail;
+                }
+            }
+
             continue;
 
         } else if (size == NGX_AGAIN) {
@@ -2124,7 +2171,6 @@ ngx_http_upstream_check_http_init(ngx_http_upstream_check_peer_t *peer)
 static ngx_int_t
 ngx_http_upstream_check_http_parse(ngx_http_upstream_check_peer_t *peer)
 {
-    off_t                                avail, cl;
     ngx_int_t                            rc;
     ngx_buf_t                           *b;
     ngx_uint_t                           code, code_n;
@@ -2244,33 +2290,9 @@ ngx_http_upstream_check_http_parse(ngx_http_upstream_check_peer_t *peer)
         peer->recv_chunk_state = sw_chunk_size;
         peer->recv_body_remaining = 0;
 
-        rc = ngx_http_upstream_check_chunked_drain(b, &peer->recv_chunk_state,
-                                                   &peer->recv_body_remaining);
-        if (rc == NGX_ERROR) {
-            /*
-             * Malformed chunk framing. The verdict is already decided from the
-             * status line, but the connection cannot be reused safely.
-             */
-            c->error = 1;
-            peer->recv_body_pending = 0;
-        } else {
-            peer->recv_body_pending = (rc == NGX_AGAIN);
-        }
-
     } else if (ctx->http_headers.seen_cl) {
         peer->recv_body_chunked = 0;
-        cl = ctx->http_headers.content_length;
-        avail = b->last - b->pos;
-
-        if (avail >= cl) {
-            b->pos += (size_t) cl;
-            peer->recv_body_remaining = 0;
-            peer->recv_body_pending = 0;
-        } else {
-            b->pos = b->last;
-            peer->recv_body_remaining = cl - avail;
-            peer->recv_body_pending = 1;
-        }
+        peer->recv_body_remaining = ctx->http_headers.content_length;
 
     } else {
         /*
@@ -2281,7 +2303,30 @@ ngx_http_upstream_check_http_parse(ngx_http_upstream_check_peer_t *peer)
          */
         c->error = 1;
         peer->recv_body_pending = 0;
+        goto parse_done;
     }
+
+    rc = ngx_http_upstream_check_body_drain(b, peer->recv_body_chunked,
+                                            &peer->recv_chunk_state,
+                                            &peer->recv_body_remaining);
+    if (rc == NGX_ERROR) {
+        /*
+         * Malformed chunk framing. The verdict is already decided from the
+         * status line, but the connection cannot be reused safely.
+         */
+        c->error = 1;
+        peer->recv_body_pending = 0;
+
+    } else {
+        /*
+         * NGX_AGAIN means part of the body has not arrived yet; the discard
+         * handler installed by clean_event() drains the rest while the check is
+         * idle, and clears recv_body_pending once it is done.
+         */
+        peer->recv_body_pending = (rc == NGX_AGAIN);
+    }
+
+ parse_done:
 
     ctx->parse_phase = NGX_CHECK_PARSE_DONE;
 
