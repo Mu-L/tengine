@@ -82,6 +82,8 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: alibaba/xquic
+          # Supported API baseline; keep in sync with packages/build/deps.env.
+          ref: v1.9.5
           path: xquic
       - name: build xquic
         working-directory: xquic
