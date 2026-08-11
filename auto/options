@@ -707,23 +707,42 @@ fi
 
 
 # Tengine 3.2.0 renamed the default install layout from the inherited nginx
-# names to tengine (prefix /usr/local/tengine, binary sbin/tengine, config
-# conf/tengine.conf). An install made by an earlier release lives under
-# different paths, so "make install" no longer replaces it and the old binary
-# keeps serving traffic. Warn when both the paths are defaulted and a legacy
-# install is present, since the two would otherwise coexist silently.
-if [ -z "$NGX_PREFIX" ] && [ -z "$NGX_SBIN_PATH" ] \
-   && [ -x /usr/local/nginx/sbin/nginx ]
+# names to tengine (binary sbin/tengine, config conf/tengine.conf, pid
+# logs/tengine.pid) and the default prefix from /usr/local/nginx to
+# /usr/local/tengine. An install made by an earlier release uses the nginx
+# names, so any of those paths left at its default silently stops lining up
+# with it: "make install" does not replace the old binary, the new binary
+# looks for a tengine.conf that is not there, and it writes its pid to a file
+# the old service scripts do not read. Warn whenever a path is defaulted and
+# an nginx-named install is found where this build would land.
+#
+# With --prefix omitted the previous release installed to /usr/local/nginx;
+# with an explicit prefix it is that prefix that held the old install. Skip
+# the check for --prefix= (no prefix at all), where there is no install tree.
+if [ ".$NGX_PREFIX" != ".!" ] \
+   && { [ -z "$NGX_SBIN_PATH" ] || [ -z "$NGX_CONF_PATH" ] \
+        || [ -z "$NGX_PID_PATH" ]; }
 then
-    NGX_POST_CONF_MSG="$NGX_POST_CONF_MSG
-$0: warning: found an existing install at \"/usr/local/nginx/sbin/nginx\". \
-Tengine 3.2.0 installs to \"/usr/local/tengine/sbin/tengine\" by default, so \
-\"make install\" will not replace that binary and the old one keeps running. \
-Remove the old install once you have switched over, or keep the previous \
-layout by passing --prefix=/usr/local/nginx \
---sbin-path=/usr/local/nginx/sbin/nginx \
---conf-path=/usr/local/nginx/conf/nginx.conf \
---pid-path=/usr/local/nginx/logs/nginx.pid"
+    if [ -z "$NGX_PREFIX" ]; then
+        ngx_legacy_prefix=/usr/local/nginx
+    else
+        ngx_legacy_prefix=$NGX_PREFIX
+    fi
+
+    if [ -x "$ngx_legacy_prefix/sbin/nginx" ] \
+       || [ -f "$ngx_legacy_prefix/conf/nginx.conf" ]
+    then
+        NGX_POST_CONF_MSG="$NGX_POST_CONF_MSG
+$0: warning: found an existing nginx-named install under \
+\"$ngx_legacy_prefix\". Tengine 3.2.0 defaults to the tengine names, so this \
+build will not replace \"$ngx_legacy_prefix/sbin/nginx\", will not read \
+\"$ngx_legacy_prefix/conf/nginx.conf\", and will write its pid to \
+\"logs/tengine.pid\" instead of \"logs/nginx.pid\". Keep the previous layout \
+by passing --prefix=$ngx_legacy_prefix \
+--sbin-path=$ngx_legacy_prefix/sbin/nginx \
+--conf-path=$ngx_legacy_prefix/conf/nginx.conf \
+--pid-path=$ngx_legacy_prefix/logs/nginx.pid"
+    fi
 fi
 
 NGX_SBIN_PATH=${NGX_SBIN_PATH:-sbin/tengine}
