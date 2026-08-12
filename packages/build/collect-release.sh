@@ -78,13 +78,15 @@ fi
 mkdir -p "$OUTDIR" "$DEBUGDIR"
 
 # Debug symbol packages, by the name each packaging format gives them:
-# rpm splits out -debuginfo and -debugsource, deb produces tengine-dbgsym
-# (.deb on Debian, .ddeb on Ubuntu), Alpine produces tengine-dbg.
+# rpm splits out -debuginfo and -debugsource, deb produces -dbgsym
+# (.deb on Debian, .ddeb on Ubuntu), Alpine produces -dbg.  Every pattern is
+# prefix agnostic: subpackages carry their own debug package, so the deb side
+# has tengine-module-perl-dbgsym next to tengine-dbgsym.
 is_debug() {
     case "$1" in
         *-debuginfo-*.rpm|*-debugsource-*.rpm) return 0 ;;
-        tengine-dbgsym_*.deb|tengine-dbgsym_*.ddeb) return 0 ;;
-        tengine-dbg-*.apk) return 0 ;;
+        *-dbgsym_*.deb|*-dbgsym_*.ddeb) return 0 ;;
+        *-dbg-*.apk) return 0 ;;
         *) return 1 ;;
     esac
 }
