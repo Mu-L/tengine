@@ -5,6 +5,7 @@
 #include <ngx_http_xquic_module.h>
 #include <ngx_xquic.h>
 #include <ngx_xquic_intercom.h>
+#include <ngx_xquic_ssl_conf.h>
 #include <unistd.h>
 
 
@@ -80,6 +81,7 @@ static char * ngx_http_xquic_merge_srv_conf(ngx_conf_t *cf, void *parent, void *
 static ngx_int_t ngx_http_xquic_process_init(ngx_cycle_t *cycle);
 static void ngx_http_xquic_process_exit(ngx_cycle_t *cycle);
 static ngx_int_t ngx_http_xquic_init(ngx_conf_t *cf);
+static ngx_int_t ngx_http_xquic_check_ssl_conf(ngx_conf_t *cf);
 static ngx_int_t ngx_http_xquic_access_handler(ngx_http_request_t *r);
 static char * ngx_http_set_xquic_status(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static ngx_int_t ngx_http_xquic_module_init(ngx_cycle_t *cycle);
@@ -1354,16 +1356,38 @@ ngx_http_xquic_init_main_conf(ngx_conf_t *cf, void *conf)
         qmcf->intercom_reload_socket_path.len = sizeof(NGX_XQUIC_DEFAULT_RELOAD_SOCKET_PATH) - 1;
     }
 
-    if (qmcf->certificate.data == NULL) {
-        ngx_str_set(&(qmcf->certificate), "./server.crt");
+    /*
+     * The certificate, its key and the session ticket key are read by the
+     * xquic engine, in the worker, long after this point. They used to default
+     * to the bare relative paths "./server.crt", "./server.key" and
+     * "./session_ticket.key", which resolve against the current working
+     * directory of the worker -- "/" under systemd -- and so never existed.
+     * Every worker then died with fatal code 2 and could not be respawned,
+     * taking the plain HTTP listeners down with it, while "nginx -t" reported
+     * the configuration as valid.
+     *
+     * So leave them unset instead: ngx_http_xquic_check_ssl_conf() rejects the
+     * configuration when an xquic listener is present without a certificate,
+     * and a relative path that was configured explicitly is resolved against
+     * the prefix, the way ssl_certificate does it, rather than against the
+     * working directory of whoever started the master.
+     */
+    if (qmcf->certificate.len
+        && ngx_conf_full_name(cf->cycle, &qmcf->certificate, 1) != NGX_OK)
+    {
+        return NGX_CONF_ERROR;
     }
 
-    if (qmcf->certificate_key.data == NULL) {
-        ngx_str_set(&(qmcf->certificate_key), "./server.key");
+    if (qmcf->certificate_key.len
+        && ngx_conf_full_name(cf->cycle, &qmcf->certificate_key, 1) != NGX_OK)
+    {
+        return NGX_CONF_ERROR;
     }
 
-    if (qmcf->session_ticket_key.data == NULL) {
-        ngx_str_set(&(qmcf->session_ticket_key), "./session_ticket.key");
+    if (qmcf->session_ticket_key.len
+        && ngx_conf_full_name(cf->cycle, &qmcf->session_ticket_key, 1) != NGX_OK)
+    {
+        return NGX_CONF_ERROR;
     }
 
     if (qmcf->stateless_reset_token_key.data == NULL) {
@@ -1592,6 +1616,108 @@ ngx_http_xquic_process_exit(ngx_cycle_t *cycle)
 }
 
 
+/*
+ * Validate the engine level certificate configuration, the way
+ * ngx_http_ssl_init() does it for "listen ... ssl".
+ *
+ * xquic reads the certificate inside the engine, in the worker, which used to
+ * make a missing or unreadable path surface only as "worker process exited with
+ * fatal code 2 and cannot be respawned" -- every listener down, plain HTTP
+ * included -- while "nginx -t" reported the configuration as valid. Failing
+ * here instead means "nginx -t" catches it, and a bad reload is rejected while
+ * the running workers keep serving. It has to stay in the configuration phase
+ * for that: ngx_init_cycle() treats a failing init_module as fatal and exits
+ * the master outright, reload included.
+ *
+ * The check is gated on an xquic listener being configured because
+ * ngx_xquic_process_init() creates the engine under the same condition: a build
+ * with the module compiled in but no "listen ... xquic" must keep starting
+ * without a certificate.
+ */
+static ngx_int_t
+ngx_http_xquic_check_ssl_conf(ngx_conf_t *cf)
+{
+    ngx_uint_t                   a, p;
+    ngx_err_t                    err;
+    const char                  *missing;
+    ngx_http_conf_addr_t        *addr;
+    ngx_http_conf_port_t        *port;
+    ngx_http_core_srv_conf_t    *cscf;
+    ngx_http_core_main_conf_t   *cmcf;
+    ngx_http_xquic_main_conf_t  *qmcf;
+
+    cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
+
+    if (cmcf->ports == NULL) {
+        return NGX_OK;
+    }
+
+    qmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_xquic_module);
+
+    port = cmcf->ports->elts;
+    for (p = 0; p < cmcf->ports->nelts; p++) {
+
+        addr = port[p].addrs.elts;
+        for (a = 0; a < port[p].addrs.nelts; a++) {
+
+            if (!addr[a].opt.xquic) {
+                continue;
+            }
+
+            cscf = addr[a].default_server;
+
+            missing = ngx_xquic_ssl_cert_missing(&qmcf->certificate,
+                                                 &qmcf->certificate_key);
+            if (missing != NULL) {
+                ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+                              "no \"%s\" is defined for "
+                              "the \"listen ... xquic\" directive in %s:%ui",
+                              missing, cscf->file_name, cscf->line);
+                return NGX_ERROR;
+            }
+
+            /*
+             * Probe both files while the paths are still reportable. This does
+             * not replace the worker side probe in ngx_xquic_engine_init():
+             * the master usually runs as root, so a key readable by root alone
+             * passes here and only fails once the worker drops privileges.
+             */
+            err = ngx_xquic_cert_file_check((char *) qmcf->certificate.data);
+            if (err != 0) {
+                ngx_log_error(NGX_LOG_EMERG, cf->log, err,
+                              "cannot read xquic_ssl_certificate \"%V\"",
+                              &qmcf->certificate);
+                return NGX_ERROR;
+            }
+
+            err = ngx_xquic_cert_file_check((char *) qmcf->certificate_key.data);
+            if (err != 0) {
+                ngx_log_error(NGX_LOG_EMERG, cf->log, err,
+                              "cannot read xquic_ssl_certificate_key \"%V\"",
+                              &qmcf->certificate_key);
+                return NGX_ERROR;
+            }
+
+            /*
+             * Warn once here rather than once per worker: without a shared key
+             * every worker generates its own, so a ticket issued by one worker
+             * never resumes on another and 0-RTT is effectively off.
+             */
+            if (qmcf->session_ticket_key.len == 0) {
+                ngx_log_error(NGX_LOG_WARN, cf->log, 0,
+                              "no \"xquic_ssl_session_ticket_key\" is defined, "
+                              "0-RTT will be unavailable with multiple workers");
+            }
+
+            /* the certificate is engine wide, one listener is enough to check */
+            return NGX_OK;
+        }
+    }
+
+    return NGX_OK;
+}
+
+
 static ngx_int_t
 ngx_http_xquic_init(ngx_conf_t *cf)
 {
@@ -1607,7 +1733,9 @@ ngx_http_xquic_init(ngx_conf_t *cf)
 
     *h = ngx_http_xquic_access_handler;
 
-    
+    if (ngx_http_xquic_check_ssl_conf(cf) != NGX_OK) {
+        return NGX_ERROR;
+    }
 
     return NGX_OK;
 }

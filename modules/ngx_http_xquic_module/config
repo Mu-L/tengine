@@ -16,6 +16,8 @@ NGX_ADDON_DEPS="$NGX_ADDON_DEPS \
                 $ngx_addon_dir/ngx_xquic_intercom.h \
                 $ngx_addon_dir/ngx_xquic_recv.h \
                 $ngx_addon_dir/ngx_xquic_send.h \
+                $ngx_addon_dir/ngx_xquic_file.h \
+                $ngx_addon_dir/ngx_xquic_ssl_conf.h \
                 $ngx_addon_dir/ngx_http_v3_stream.h"
 
 NGX_ADDON_SRCS="$NGX_ADDON_SRCS \

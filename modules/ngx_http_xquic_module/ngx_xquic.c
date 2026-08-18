@@ -13,6 +13,7 @@
 #include <ngx_xquic_recv.h>
 #include <ngx_xquic_send.h>
 #include <ngx_xquic_file.h>
+#include <ngx_xquic_ssl_conf.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 
@@ -168,6 +169,8 @@ ngx_xquic_engine_init(ngx_cycle_t *cycle)
     ngx_http_xquic_main_conf_t  *qmcf = ngx_http_cycle_get_module_main_conf(cycle, ngx_http_xquic_module);
     xqc_engine_ssl_config_t *engine_ssl_config = NULL;
     xqc_config_t config;
+    ngx_err_t    cert_err;
+    const char  *missing;
 
     if (xqc_engine_get_default_config(&config, XQC_ENGINE_SERVER) < 0) {
         return NGX_ERROR;
@@ -230,11 +233,37 @@ ngx_xquic_engine_init(ngx_cycle_t *cycle)
     /* init ssl config */
     engine_ssl_config = &(qmcf->engine_ssl_config);
 
-    if (qmcf->certificate.len == 0 || qmcf->certificate.data == NULL
-        || qmcf->certificate_key.len == 0 || qmcf->certificate_key.data == NULL)
-    {
-        ngx_log_error(NGX_LOG_EMERG, cycle->log, 0, 
-                    "|xquic|ngx_xquic_engine_init: null certificate or key|");     
+    missing = ngx_xquic_ssl_cert_missing(&qmcf->certificate,
+                                         &qmcf->certificate_key);
+    if (missing != NULL) {
+        ngx_log_error(NGX_LOG_EMERG, cycle->log, 0,
+                      "|xquic|ngx_xquic_engine_init: no \"%s\" is defined|",
+                      missing);
+        return NGX_ERROR;
+    }
+
+    /*
+     * xqc_engine_create() below reads both files itself and reports nothing but
+     * a bare "fail", after the worker has dropped privileges. Probe them first
+     * so the log names the path and the reason: a key that only root can read
+     * gets through the master side check in ngx_http_xquic_check_ssl_conf() and
+     * fails here, which is exactly the case worth spelling out.
+     */
+    cert_err = ngx_xquic_cert_file_check((char *) qmcf->certificate.data);
+    if (cert_err != 0) {
+        ngx_log_error(NGX_LOG_EMERG, cycle->log, cert_err,
+                      "|xquic|ngx_xquic_engine_init: "
+                      "cannot read xquic_ssl_certificate \"%V\"|",
+                      &qmcf->certificate);
+        return NGX_ERROR;
+    }
+
+    cert_err = ngx_xquic_cert_file_check((char *) qmcf->certificate_key.data);
+    if (cert_err != 0) {
+        ngx_log_error(NGX_LOG_EMERG, cycle->log, cert_err,
+                      "|xquic|ngx_xquic_engine_init: "
+                      "cannot read xquic_ssl_certificate_key \"%V\"|",
+                      &qmcf->certificate_key);
         return NGX_ERROR;
     }
 

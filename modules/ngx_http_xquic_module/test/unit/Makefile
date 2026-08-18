@@ -1,24 +1,25 @@
-# Stand-alone unit tests for the xquic key file helper.
+# Stand-alone unit tests for the xquic key file and certificate conf helpers.
 #
 #   make        - build and run the tests
-#   make clean  - remove the built binary
+#   make clean  - remove the built binaries
 
 CC      ?= cc
 CFLAGS  ?= -Wall -Wextra -Werror -g -O0
 
-BIN     := test_xquic_read_file_data
-SRC     := test_xquic_read_file_data.c
-HDR     := ../../ngx_xquic_file.h
+BINS    := test_xquic_read_file_data test_xquic_ssl_conf
 
 .PHONY: all check clean
 
 all: check
 
-$(BIN): $(SRC) $(HDR)
-	$(CC) $(CFLAGS) -o $@ $(SRC)
+test_xquic_read_file_data: test_xquic_read_file_data.c ../../ngx_xquic_file.h
+	$(CC) $(CFLAGS) -o $@ $<
 
-check: $(BIN)
-	./$(BIN)
+test_xquic_ssl_conf: test_xquic_ssl_conf.c ../../ngx_xquic_ssl_conf.h
+	$(CC) $(CFLAGS) -o $@ $<
+
+check: $(BINS)
+	@for b in $(BINS); do echo "==> $$b"; ./$$b || exit 1; done
 
 clean:
-	rm -f $(BIN)
+	rm -f $(BINS)
