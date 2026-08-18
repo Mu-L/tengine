@@ -26,6 +26,20 @@ jobs:
          sudo apt update
          sudo apt remove nginx libgd3
          sudo apt install -y libgd-dev libgeoip-dev libxslt1-dev libpcre3 libpcre3-dev liblua5.1-0-dev lua5.1 libperl-dev cpanminus libssl-dev
+     # Stand-alone unit tests: each stubs the handful of ngx types it needs, so
+     # neither depends on a built tengine -- and the xquic ones run even though
+     # this job does not build the xquic module. Kept ahead of the build so a
+     # failing build cannot mask them, and so they fail fast.
+     - name: upstream check HTTP parser unit tests
+       env:
+         CC: ${{ matrix.compiler.CC }}
+       run: |
+         make -C modules/ngx_http_upstream_check_module/tests
+     - name: xquic key file and certificate conf unit tests
+       env:
+         CC: ${{ matrix.compiler.CC }}
+       run: |
+         make -C modules/ngx_http_xquic_module/test/unit
      - name: 'checkout luajit2'
        uses: actions/checkout@v7
        with:
@@ -148,15 +162,6 @@ jobs:
            cases/ngx_http_upstream_check_module/unix_socket_check.t \
            cases/ngx_http_upstream_check_module/websocket.t \
            cases/ngx_http_upstream_check_module/check_interface.t
-     - name: upstream check HTTP parser unit tests
-       run: |
-         make -C modules/ngx_http_upstream_check_module/tests
-     # Stand-alone: stubs the handful of ngx types it needs, so it runs here even
-     # though this job does not build the xquic module.
-     - name: xquic key file unit tests
-       run: |
-         make -C modules/ngx_http_xquic_module/test/unit
-
   # Separate build that enables the native ngx_http_tunnel_module explicitly
   # (--with-http_tunnel_module; it is off by default) and does NOT link
   # ngx_http_proxy_connect_module, so the upstream tunnel*.t cases actually run
