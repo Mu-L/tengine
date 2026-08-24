@@ -55,9 +55,30 @@ if (!$test_client) {
 # 4 e2e tests (baseline 200 + bomb rejected, x2 servers) when
 # test_client is available — otherwise skipped, but still counted
 # in the plan since Test::More's skip() emits "ok # SKIP" lines.
+#
+# todo_alerts(): running xquic at all produces two classes of [alert]
+# that say nothing about max_headers, and the framework's own "no
+# alerts" check in Test::Nginx::DESTROY would fail on both.
+#
+#   - "setsockopt(new-udp-hash) failed, ignored" (95: not supported):
+#     the SOL_UDP option 200 set in ngx_open_listening_sockets() only
+#     exists in Alibaba kernels; elsewhere it returns EOPNOTSUPP and
+#     the code carries on, as "ignored" says.
+#   - "open socket #N left in connection 3" / "aborting" on shutdown,
+#     one pair per worker: xquic listeners are not torn down through
+#     ngx_close_connection(), so the leak check trips on every stop.
+#
+# Both are pre-existing xquic behaviour, not something this test can
+# fix or should mask for other suites, so downgrade the check to TODO.
+#
+# Clearing error.log instead is not an option, for two reasons: DESTROY
+# calls stop() before reading the log, so the shutdown alerts are written
+# after any clearing a test body could do; and it would swallow a real
+# emerg from a bad config along with them.
 
-my $t = Test::Nginx->new()->has(qw/http rewrite/)
+my $t = Test::Nginx->new()->has(qw/http rewrite xquic/)
     ->has_daemon('openssl')
+    ->todo_alerts()
     ->plan(6)
     ->write_file_expand('nginx.conf', <<'EOF');
 
@@ -142,8 +163,12 @@ sleep 1;
 my $error_log = $t->read_file('error.log');
 unlike($error_log, qr/unknown directive.*max_headers/i,
        'max_headers directive recognized in xquic server block');
-unlike($error_log, qr/\[(emerg|alert)\]/,
-       'no emerg/alert in error log on startup');
+# Only [emerg] is fatal here. The startup [alert] this reliably emits on
+# non-Alibaba kernels -- setsockopt(new-udp-hash), see the todo_alerts()
+# note above -- is explicitly ignored by the server, so matching bare
+# [alert] would fail the suite for a reason unrelated to max_headers.
+unlike($error_log, qr/\[emerg\]/,
+       'no emerg in error log on startup');
 
 ###############################################################################
 
@@ -182,10 +207,6 @@ SKIP: {
     unlike($bomb_b, qr/:status = 200/,
            'server B bomb - request not 200');
 }
-
-# Clear error log so the framework's own no-alerts check doesn't trip
-# on the noise test_client and finalize_request(494) generate.
-$t->write_file('error.log', '') if $has_test_client;
 
 $t->stop();
 
