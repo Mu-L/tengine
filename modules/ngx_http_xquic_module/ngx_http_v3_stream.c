@@ -933,8 +933,15 @@ ngx_http_v3_request_process_header(ngx_http_request_t *r,
     if (r->headers_in.count++ >= cscf->max_headers) {
         ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
                       "client sent too many header lines");
+
         ngx_http_finalize_request(r, NGX_HTTP_REQUEST_HEADER_TOO_LARGE);
-        return NGX_ERROR;
+
+        /*
+         * request has been finalized already, which this function reports
+         * as NGX_ABORT, the same way ngx_http_v3_parse_path() and
+         * ngx_http_v3_parse_authority() do
+         */
+        return NGX_ABORT;
     }
 
     h = ngx_list_push(&r->headers_in.headers);
@@ -959,7 +966,11 @@ ngx_http_v3_request_process_header(ngx_http_request_t *r,
                        h->lowcase_key, h->key.len);
 
     if (hh && hh->handler(r, h, hh->offset) != NGX_OK) {
-        return NGX_ERROR;
+        /*
+         * a failing header handler has finalized the request itself,
+         * e.g. ngx_http_process_host(), so this is NGX_ABORT as well
+         */
+        return NGX_ABORT;
     }
 
     return NGX_OK;
@@ -1254,8 +1265,13 @@ ngx_http_v3_request_read_notify(xqc_h3_request_t *h3_request, xqc_request_notify
             ret = ngx_http_v3_request_process_header(user_stream->request, 
                         &(headers->headers[i]), h3_request);
 
-            /* NGX_ABORT - request has been closed */
-            /* NGX_ERROR,NGX_DECLINED - request err but not closed */   
+            /*
+             * NGX_ABORT - request has been closed
+             * NGX_ERROR, NGX_DECLINED - request err but not closed
+             *
+             * all of them are currently collapsed into the same handling:
+             * the header block is abandoned and the read notify fails
+             */
 
             if (ret != NGX_OK) {
                 ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0,
