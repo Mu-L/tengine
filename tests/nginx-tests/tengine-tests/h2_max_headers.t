@@ -32,7 +32,7 @@ use Test::Nginx::HTTP2;
 select STDERR; $| = 1;
 select STDOUT; $| = 1;
 
-my $t = Test::Nginx->new()->has(qw/http http_v2 rewrite/)->plan(5)
+my $t = Test::Nginx->new()->has(qw/http http_v2 rewrite/)->plan(10)
 	->write_file_expand('nginx.conf', <<'EOF');
 
 %%TEST_GLOBALS%%
@@ -92,9 +92,13 @@ is($frame->{headers}->{':status'}, 200, 'baseline - 200 OK');
 
 # 2) the HPACK indexed-reference bomb.
 #
-# First field: literal-with-incremental-indexing.  This both sends the
-# header and parks one (name, value) entry in the dynamic table at the
-# first dynamic index, one byte of wire encoding per later use.
+# First field: literal-with-incremental-indexing, new name (mode 2).
+# This both sends the header and parks one (name, value) entry in the
+# dynamic table at the first dynamic index, one byte of wire encoding
+# per later use.  The new-name form is required here: the indexed-name
+# form (mode 1) resolves "x-bomb" against the encoder table *after*
+# inserting the entry, so it emits a self-referential name index that
+# the peer decodes as whatever already sits at that slot.
 #
 # Following fields: 60 indexed references to that same entry.  Each
 # reference is one wire byte, but every one of them is a fresh header
@@ -106,7 +110,7 @@ push @bomb, { name => ':method',    value => 'GET',       mode => 0 };
 push @bomb, { name => ':scheme',    value => 'http',      mode => 0 };
 push @bomb, { name => ':path',      value => '/',         mode => 0 };
 push @bomb, { name => ':authority', value => 'localhost', mode => 1 };
-push @bomb, { name => 'x-bomb',     value => 'v',         mode => 1 };
+push @bomb, { name => 'x-bomb',     value => 'v',         mode => 2 };
 push @bomb, { name => 'x-bomb',     value => 'v',         mode => 0 } for 1 .. 60;
 
 $s = Test::Nginx::HTTP2->new();
@@ -127,7 +131,7 @@ push @big, { name => ':method',    value => 'GET',       mode => 0 };
 push @big, { name => ':scheme',    value => 'http',      mode => 0 };
 push @big, { name => ':path',      value => '/',         mode => 0 };
 push @big, { name => ':authority', value => 'localhost', mode => 1 };
-push @big, { name => 'x-bomb',     value => 'v',         mode => 1 };
+push @big, { name => 'x-bomb',     value => 'v',         mode => 2 };
 push @big, { name => 'x-bomb',     value => 'v',         mode => 0 } for 1 .. 1100;
 
 $s = Test::Nginx::HTTP2->new(port(8081));
@@ -139,5 +143,78 @@ isnt($frame && $frame->{headers}->{':status'}, '200',
 	'default cap - request rejected, not 200');
 like($frame && $frame->{headers}->{':status'}, qr/^4\d\d$/,
 	'default cap - 4xx status returned');
+
+# 4) the cap trips while the HEADERS frame still carries many more fields.
+#
+# Hitting max_headers finalizes the request from inside the header handler,
+# which only queues the termination on r->main->posted_requests; the decoder
+# then detaches h2c->state.stream and keeps decoding the rest of the frame.
+# If the posted request is not driven before that, it is finalized later
+# against an already detached stream and a stale h2c->state.
+#
+# With the limit at 50 and 200 references sent, roughly 150 fields are still
+# decoded after the request has been finalized.
+
+my @rest;
+push @rest, { name => ':method',    value => 'GET',       mode => 0 };
+push @rest, { name => ':scheme',    value => 'http',      mode => 0 };
+push @rest, { name => ':path',      value => '/',         mode => 0 };
+push @rest, { name => ':authority', value => 'localhost', mode => 1 };
+push @rest, { name => 'x-bomb',     value => 'v',         mode => 2 };
+push @rest, { name => 'x-bomb',     value => 'v',         mode => 0 } for 1 .. 200;
+
+$s = Test::Nginx::HTTP2->new();
+$sid = $s->new_stream({ headers => \@rest });
+$frames = $s->read(all => [{ sid => $sid, fin => 1 }]);
+
+($frame) = grep { $_->{type} eq 'HEADERS' } @$frames;
+like($frame && $frame->{headers}->{':status'}, qr/^4\d\d$/,
+	'trailing fields - 4xx status returned');
+
+# 5) the connection must survive it: a fresh stream on the SAME connection
+# still has to complete normally.  This is the regression guard - if the
+# termination was left queued, the connection state is inconsistent by now
+# and this request does not get its 200 back.
+
+$sid = $s->new_stream({ headers => [
+	{ name => ':method',    value => 'GET',       mode => 0 },
+	{ name => ':scheme',    value => 'http',      mode => 0 },
+	{ name => ':path',      value => '/',         mode => 0 },
+	{ name => ':authority', value => 'localhost', mode => 1 },
+]});
+$frames = $s->read(all => [{ sid => $sid, fin => 1 }]);
+
+($frame) = grep { $_->{type} eq 'HEADERS' } @$frames;
+is($frame && $frame->{headers}->{':status'}, 200,
+	'trailing fields - connection still usable');
+
+# 6) same thing, but the cap trips while decoding a CONTINUATION frame:
+# the first 20 bytes of the HPACK stream stay in HEADERS, everything else
+# (including the field that trips the limit) arrives in CONTINUATION.
+
+$s = Test::Nginx::HTTP2->new();
+$sid = $s->new_stream({ headers => \@rest, continuation => [20] });
+$frames = $s->read(all => [{ sid => $sid, fin => 1 }]);
+
+($frame) = grep { $_->{type} eq 'HEADERS' } @$frames;
+like($frame && $frame->{headers}->{':status'}, qr/^4\d\d$/,
+	'continuation - 4xx status returned');
+
+$sid = $s->new_stream({ headers => [
+	{ name => ':method',    value => 'GET',       mode => 0 },
+	{ name => ':scheme',    value => 'http',      mode => 0 },
+	{ name => ':path',      value => '/',         mode => 0 },
+	{ name => ':authority', value => 'localhost', mode => 1 },
+]});
+$frames = $s->read(all => [{ sid => $sid, fin => 1 }]);
+
+($frame) = grep { $_->{type} eq 'HEADERS' } @$frames;
+is($frame && $frame->{headers}->{':status'}, 200,
+	'continuation - connection still usable');
+
+# 7) no worker died along the way.
+
+unlike($t->read_file('error.log'), qr/exited on signal/,
+	'no worker process crash');
 
 ###############################################################################

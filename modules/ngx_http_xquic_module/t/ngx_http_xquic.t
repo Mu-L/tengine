@@ -40,8 +40,18 @@ if (!$test_client) {
 
 my $test_count = $has_test_client ? 5 : 4;
 
-my $t = Test::Nginx->new()->has(qw/http/)
+# todo_alerts(): running xquic at all produces [alert]s that say nothing
+# about this test -- setsockopt(new-udp-hash) on non-Alibaba kernels at
+# startup, "open socket left in connection" on shutdown.  See the longer
+# note in h3_max_headers.t.  Downgrading the framework's own "no alerts"
+# check to TODO is the only way to tolerate them: clearing error.log
+# cannot work, because Test::Nginx::DESTROY stops the server *before*
+# reading the log, so the shutdown alerts land after any clearing this
+# file could do -- and it would swallow a real emerg on the way.
+
+my $t = Test::Nginx->new()->has(qw/http xquic/)
     ->has_daemon('openssl')
+    ->todo_alerts()
     ->plan($test_count)
     ->write_file_expand('nginx.conf', <<'EOF');
 
@@ -160,9 +170,6 @@ if ($has_test_client) {
     } else {
         fail('xquic test_client failed to parse output');
     }
-    
-    # Clear error log to avoid alerts from test_client failures
-    $t->write_file('error.log', '');
 }
 
 # Output detailed error information for debugging

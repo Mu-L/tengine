@@ -139,6 +139,13 @@ jobs:
          prove -v -Inginx-tests/lib ../../modules/ngx_debug_timer/t
          prove -v -Inginx-tests/lib ../../modules/ngx_debug_conn/t
          prove -v -Inginx-tests/lib ../../modules/ngx_slab_stat/t
+         # test-ntls.yml is where these actually run: it builds xquic and
+         # points TEST_XQUIC_CLIENT at the client binary. Here the module is
+         # not built, so every case in the directory must skip_all on
+         # has(xquic) -- which is exactly what this invocation guards. A case
+         # added without that guard fails here on "unknown directive xquic_*"
+         # long before anyone notices it in the ntls workflow.
+         prove -v -Inginx-tests/lib ../../modules/ngx_http_xquic_module/t
      - name: tengine test cases using test-nginx lib
        working-directory: tests/test-nginx
        run: |
