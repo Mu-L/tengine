@@ -456,7 +456,50 @@ bootstrap_cmd() {
     case "$1" in
         rpm)
             cat <<'EOS'
+# A repository that stalls or resets a connection is the one failure mode this
+# bootstrap sees regularly, and librepo only retries a mirror a couple of times
+# before dropping it -- once the list is empty the whole transaction fails. Retry
+# the installer itself: whatever already came down stays in the package cache, so
+# each attempt only refetches what is still missing.
+retry_install() {
+    _try=1
+    _delay=10
+    while :; do
+        if "$@"; then return 0; fi
+        [ "$_try" -lt 4 ] || return 1
+        echo "bootstrap: package install failed, retrying in ${_delay}s ($_try/4)"
+        sleep "$_delay"
+        _try=$((_try + 1))
+        _delay=$((_delay * 2))
+    done
+}
+
+_dnfopt=
 if command -v dnf >/dev/null 2>&1; then
+    # The openEuler images resolve every repo through mirrors.openeuler.org, and
+    # the mirror list it hands back is served from China: from a GitHub runner the
+    # rpm transfers crawl along at a few kB/s until librepo gives up on them
+    # ("Operation too slow", truncated HTTP/2 streams), and a 30 MB package like
+    # cmake never makes it. Huawei Cloud carries the same trees behind a CDN, so
+    # pin the repo files to it -- gpgkey included, since that host would stall the
+    # same way -- and comment the metalink out, which is what otherwise wins over
+    # the rewritten baseurl.
+    if grep -qi '^ID="\{0,1\}openEuler' /etc/os-release 2>/dev/null; then
+        sed -i -e 's|^metalink=|#metalink=|' \
+            -e 's|^baseurl=https\{0,1\}://repo\.openeuler\.org/|baseurl=https://repo.huaweicloud.com/openeuler/|' \
+            -e 's|^gpgkey=https\{0,1\}://repo\.openeuler\.org/|gpgkey=https://repo.huaweicloud.com/openeuler/|' \
+            /etc/yum.repos.d/*.repo
+        # A repo whose metalink is now commented out but whose baseurl did not match
+        # would be left with no source at all, so say so here rather than let dnf
+        # report the packages as simply missing.
+        grep -q '^baseurl=https://repo.huaweicloud.com/openeuler/' /etc/yum.repos.d/*.repo \
+            || { echo "bootstrap: no openEuler baseurl was rewritten"; exit 1; }
+        # And keep dnf to one download at a time: the parallel ones share a single
+        # HTTP/2 connection, so one reset stream takes the whole batch with it.
+        # Scoped to openEuler because these are dnf 4 option names; el10 runs dnf 5
+        # and would refuse an option it does not know.
+        _dnfopt="--setopt=max_parallel_downloads=1 --setopt=timeout=120 --setopt=retries=10 --setopt=minrate=100"
+    fi
     if dnf -q list pcre2-devel >/dev/null 2>&1; then _pcre=pcre2-devel; else _pcre=pcre-devel; fi
     # el9 images carry curl-minimal, which conflicts with the full curl package.
     # It provides /usr/bin/curl all the same, so only ask for curl when the image
@@ -471,7 +514,9 @@ if command -v dnf >/dev/null 2>&1; then
     # perl-devel and ExtUtils::Embed are for ngx_http_perl_module rather than
     # Tongsuo: the embedded interpreter compiles against the perl headers and
     # links libperl, which the RHEL family splits out of the base perl package.
-    dnf -y install rpm-build gcc gcc-c++ make cmake tar findutils diffutils $_curl \
+    # $_dnfopt is an option list and is meant to word-split; empty adds nothing.
+    retry_install dnf -y $_dnfopt install \
+        rpm-build gcc gcc-c++ make cmake tar findutils diffutils $_curl \
         perl "perl(FindBin)" "perl(IPC::Cmd)" "perl(lib)" \
         perl-devel "perl(ExtUtils::Embed)" \
         openssl-devel zlib-devel systemd "$_pcre"
@@ -486,7 +531,7 @@ else
     # one by one just moves the failure to the next module.
     # perl-devel is already one of perl-core's dependencies, but it is listed
     # here too because ngx_http_perl_module -- not Tongsuo -- is what needs it.
-    yum -y install rpm-build gcc gcc-c++ make tar findutils diffutils curl \
+    retry_install yum -y install rpm-build gcc gcc-c++ make tar findutils diffutils curl \
         perl-core perl-devel openssl-devel zlib-devel pcre-devel systemd
     # el7 packages CMake 2.8 and xquic needs >= 3.5. The usual answer, cmake3,
     # lives only in EPEL 7 -- itself EOL, with a dead metalink and nothing but
@@ -494,7 +539,8 @@ else
     # repo files. Kitware's own build is a static tarball needing just glibc
     # 2.17, which el7 has. build.sh detects that rpm does not own this CMake
     # and drops the matching BuildRequires by itself.
-    curl -fsSL "https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-$(uname -m).tar.gz" \
+    curl -fsSL --retry 3 --retry-delay 5 \
+        "https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-$(uname -m).tar.gz" \
         | tar xz --strip-components=1 -C /usr/local
     cmake --version
 fi
