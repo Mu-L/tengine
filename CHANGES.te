@@ -92,7 +92,7 @@ Changes with Tengine 3.2.0                                         31 Jul 2026
        over, or keep the previous layout by passing --prefix, --sbin-path,
        --conf-path and --pid-path explicitly (lianglli)
 
-    *) Change: update core to Nginx-1.31.3 (lianglli)
+    *) Change: update core to Nginx-1.31.4 (lianglli)
 
     *) Change: update ngx_http_lua_module to 0.10.29, which adds PCRE2
        support and matches the pinned lua-resty-core; a build against PCRE2
@@ -108,7 +108,7 @@ Changes with Tengine 3.2.0                                         31 Jul 2026
        cases (lianglli)
 
     *) Change: the xquic baseline used by the packages and by CI moved to
-       v1.9.5; the module stays compatible with the v1.8.0 to v1.9.5 API
+       v1.9.6; the module stays compatible with the v1.8.0 to v1.9.6 API
        generation, and modules/ngx_http_xquic_module/README.md now lists the
        xquic version verified for each Tengine release [XQUIC] (Yanmei-Liu)
 
