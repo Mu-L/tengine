@@ -134,6 +134,15 @@ Ubuntu 22.04/24.04/26.04、SLES 15 SP6+/16、Alpine 3.21~3.24，均双架构）�
 > `target_dist`）。Anolis 无此问题 —— 其镜像自带 `%dist`，产物形如
 > `tengine-3.2.0-<ts>.an8.x86_64.rpm`。
 
+> openEuler 镜像的仓库默认走 `mirrors.openeuler.org` 的 metalink，而它给出的镜像
+> 站都在国内：GitHub runner 上拉包只有几 kB/s，librepo 会以 “Operation too slow”
+> 或 HTTP/2 流截断逐个放弃镜像，最终 `cmake`（约 30 MB）这类包必然下载失败。因此
+> bootstrap 把 openEuler 的 repo 文件（含 `gpgkey`）改指华为云镜像 —— 同一份目录树，
+> 走 CDN —— 并注掉 `metalink`（否则它会盖掉改写后的 `baseurl`），同时把 dnf 限成
+> 单连接下载：并行下载复用同一条 HTTP/2 连接，一个流被重置会带走整批。此外 rpm 家族
+> 的 bootstrap 安装命令统一由 `retry_install` 重试 4 次（10s 起指数退避），已下载的包
+> 留在 cache 里，重试只补缺失的部分。
+
 **只有 `el7` + `aarch64` 标记 `continue-on-error`**：CentOS 7 EOL 后镜像源迁到
 `vault.centos.org`，其主树只有 x86_64，aarch64 归档在 `/altarch/` 另一路径下，
 bootstrap 的源改写没覆盖，该组合不可能成功。
