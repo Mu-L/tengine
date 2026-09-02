@@ -166,3 +166,61 @@ jobs:
          sudo groupadd wheel    # for proxy_bind_transparent.t
          sudo TEST_NGINX_BINARY=/usr/local/tengine/sbin/tengine TEST_NGINX_UNSAFE=yes prove -I nginx-tests/lib nginx-tests/proxy_bind_transparent.t nginx-tests/proxy_bind_transparent_capability.t
 
+  # The job above compiles the private round robin code out with
+  # "-D T_NGX_HTTP_UPSTREAM_RANDOM=0", so nginx-tests never exercises it: every
+  # upstream case there runs the stock nginx peer selection. This job keeps the
+  # macros at their defaults (T_NGX_HTTP_UPSTREAM_RANDOM and, on top of it,
+  # T_NGX_HTTP_ROUND_ROBIN_OPT_ALI) and runs the upstream subset, which is what
+  # actually covers ngx_http_upstream_get_peer()'s ring scan and its O(1)
+  # last_peer fast path against the resolver adding and removing peers at run
+  # time. Only the modules the cases need are built: the point is to isolate the
+  # core round robin code, not to test its interaction with private modules
+  # (ci.yml does that with every module linked in).
+  upstream-private-round-robin-test:
+   name: test nginx core upstream (private round robin)
+   runs-on: "ubuntu-24.04"
+   strategy:
+     fail-fast: false
+     matrix:
+       compiler:
+         - { compiler: GNU,  CC: gcc,  CXX: g++}
+         - { compiler: LLVM, CC: clang, CXX: clang++}
+   steps:
+     - uses: actions/checkout@v7
+     - name: get dependencies
+       run: |
+         sudo apt update
+         sudo apt remove nginx
+         sudo apt install -y libpcre3 libpcre3-dev libssl-dev cpanminus memcached
+     - name: build with default macros
+       env:
+         CC: ${{ matrix.compiler.CC }}
+         CXX: ${{ matrix.compiler.CXX }}
+       run: |
+         # no -D overrides on purpose: this build is the one with the private
+         # round robin code in it.
+         ./configure \
+            --with-debug \
+            --with-http_ssl_module \
+            --with-http_v2_module
+         make -j2
+         sudo make install
+     - name: run upstream cases in nginx-tests
+       working-directory: tests/nginx-tests
+       env:
+         TEST_NGINX_BINARY: /usr/local/tengine/sbin/tengine
+       run: |
+         sudo cpanm --notest Net::DNS::Nameserver Cache::Memcached > build.log 2>&1 || (cat build.log && exit 1)
+         # The upstream_sticky cluster (upstream_sticky.t, _drain, _learn,
+         # _learn_header, _route) is left out: it fails on this branch with the
+         # private round robin code both on and off, and not always on the same
+         # assertions, so including it here would only mask regressions in the
+         # code this job exists to cover.
+         prove -I nginx-tests/lib \
+           $(ls nginx-tests/upstream*.t \
+             | grep -vE 'upstream_sticky(\.t|_drain|_learn|_learn_header|_route)') \
+           nginx-tests/proxy_next_upstream.t \
+           nginx-tests/proxy_next_upstream_tries.t \
+           tengine-tests/upstream_resolve_empty.t \
+           tengine-tests/upstream_resolve_shrink.t
+
