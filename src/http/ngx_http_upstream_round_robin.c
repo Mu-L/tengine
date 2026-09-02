@@ -863,8 +863,11 @@ ngx_http_upstream_get_round_robin_peer(ngx_peer_connection_t *pc, void *data)
          * For weighted groups, discard a random number of smooth-weight
          * adaptations once per worker so that workers do not synchronize on
          * the same starting peer after startup/reload.
+         *
+         * note: peers->number may be zero at run time, e.g. when all
+         *       re-resolvable peers have been removed by the resolver
          */
-        if (!ngx_rr_discarded_init && peers->weighted) {
+        if (!ngx_rr_discarded_init && peers->weighted && peers->number) {
             umcf = ngx_http_cycle_get_module_main_conf(ngx_cycle,
                                                        ngx_http_upstream_module);
             discarded_range = peers->number;
@@ -873,7 +876,10 @@ ngx_http_upstream_get_round_robin_peer(ngx_peer_connection_t *pc, void *data)
             }
 
             discarded_number = ngx_random() % peers->number;
-            discarded_number %= discarded_range;
+            if (discarded_range) {
+                discarded_number %= discarded_range;
+            }
+
             for (i = 0; i <= discarded_number; i++) {
                 ngx_http_upstream_adapte_rr_peer_weight(rrp);
             }
@@ -982,6 +988,19 @@ ngx_http_upstream_get_peer(ngx_http_upstream_rr_peer_data_t *rrp,
     p = 0;
 #endif
 
+#if (T_NGX_HTTP_UPSTREAM_RANDOM)
+    /*
+     * The peer list may be empty at run time: re-resolvable servers keep
+     * peers->number at zero until the first successful resolving, and the
+     * resolver removes all peers again on an empty or negative answer.
+     * Bail out early, the round robin scan below computes peer positions
+     * modulo peers->number.
+     */
+    if (rrp->peers->number == 0) {
+        return NULL;
+    }
+#endif
+
 #if (NGX_HTTP_UPSTREAM_SID)
     st_peer = ngx_http_upstream_get_rr_peer_by_sid(rrp, pc->hint, &p, 0);
 
@@ -1008,6 +1027,16 @@ ngx_http_upstream_get_peer(ngx_http_upstream_rr_peer_data_t *rrp,
 #if (T_NGX_HTTP_UPSTREAM_RANDOM)
     if (rrp->peers->init_number == NGX_CONF_UNSET_UINT) {
          rrp->peers->init_number = ngx_random() % rrp->peers->number;
+
+    } else if (rrp->peers->init_number >= rrp->peers->number) {
+        /*
+         * init_number is a peer position, drawn once against the peer count of
+         * the moment and then kept in the (shared) peers set. The resolver may
+         * have shrunk the set since, so bring it back into range: starting the
+         * scan below past the last peer walks the list to NULL, and the ring
+         * scan would then dereference it and never reach its stop condition.
+         */
+        rrp->peers->init_number %= rrp->peers->number;
     }
 
 #if (T_NGX_HTTP_ROUND_ROBIN_OPT_ALI)
@@ -1030,7 +1059,20 @@ ngx_http_upstream_get_peer(ngx_http_upstream_rr_peer_data_t *rrp,
                 peer = peer->next;
             }
 
-        } else if (rrp->peers->last_peer && rrp->peers->last_peer->next) {
+        } else if (rrp->peers->last_peer
+                   && rrp->peers->last_number < rrp->peers->number
+#if (NGX_HTTP_UPSTREAM_ZONE)
+                   /*
+                    * last_number is the position last_peer had when it was
+                    * selected, and it is what indexes rrp->tried below. Any
+                    * add/remove shifts positions (and may free last_peer), so
+                    * the cache is only usable while the peers set is intact.
+                    */
+                   && (rrp->peers->config == NULL
+                       || rrp->peers->last_config == *rrp->peers->config)
+#endif
+                   && rrp->peers->last_peer->next)
+        {
             begin_number = (rrp->peers->last_number + 1) % rrp->peers->number;
             peer = rrp->peers->last_peer->next;
 
@@ -1100,6 +1142,10 @@ ngx_http_upstream_get_peer(ngx_http_upstream_rr_peer_data_t *rrp,
             best = peer;
             rrp->peers->last_peer = peer;
             rrp->peers->last_number = i;
+#if (NGX_HTTP_UPSTREAM_ZONE)
+            rrp->peers->last_config = rrp->peers->config
+                                      ? *rrp->peers->config : 0;
+#endif
             p = i;
             break;
         }

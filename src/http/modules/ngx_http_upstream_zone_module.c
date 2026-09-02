@@ -644,6 +644,15 @@ ngx_http_upstream_zone_remove_peer_locked(ngx_http_upstream_rr_peers_t *peers,
     (*peers->config)++;
     peers->weighted = (peers->total_weight != peers->number);
 
+#if (T_NGX_HTTP_ROUND_ROBIN_OPT_ALI)
+    /* drop the cached round robin position, the peer is gone */
+
+    if (peers->last_peer == peer) {
+        peers->last_peer = NULL;
+        peers->last_number = NGX_CONF_UNSET_UINT;
+    }
+#endif
+
     ngx_http_upstream_rr_peer_free(peers, peer);
 }
 
