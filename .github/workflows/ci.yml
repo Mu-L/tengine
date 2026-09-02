@@ -135,6 +135,19 @@ jobs:
        run: |
          sudo cpanm --notest Net::DNS::Nameserver > build.log 2>&1 || (cat build.log && exit 1)
          prove -v -Inginx-tests/lib tengine-tests/
+         # Upstream's own zone/resolve cases, run here on purpose: this build has
+         # every private macro on, while test-nginx-core.yml -- the only job that
+         # runs nginx-tests/ -- compiles the private round robin code out with
+         # "-D T_NGX_HTTP_UPSTREAM_RANDOM=0". Without this step a crash in that
+         # code (peers->number reaching 0 when a resolver removes every peer) is
+         # covered by no job at all. These cases need no module beyond this build.
+         prove -v -Inginx-tests/lib \
+           nginx-tests/upstream_resolve.t \
+           nginx-tests/upstream_resolve_reload.t \
+           nginx-tests/upstream_service.t \
+           nginx-tests/upstream_sticky_resolve.t \
+           nginx-tests/upstream_zone.t \
+           nginx-tests/upstream_zone_ssl.t
          prove -v -Inginx-tests/lib ../../modules/ngx_http_proxy_connect_module/t
          prove -v -Inginx-tests/lib ../../modules/ngx_debug_timer/t
          prove -v -Inginx-tests/lib ../../modules/ngx_debug_conn/t

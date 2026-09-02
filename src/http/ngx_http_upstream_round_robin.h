@@ -147,6 +147,10 @@ struct ngx_http_upstream_rr_peers_s {
 #if (T_NGX_HTTP_ROUND_ROBIN_OPT_ALI)
     ngx_uint_t                      last_number;
     ngx_http_upstream_rr_peer_t    *last_peer;
+#if (NGX_HTTP_UPSTREAM_ZONE)
+    /* *config as seen when last_peer/last_number were recorded */
+    ngx_uint_t                      last_config;
+#endif
 #endif
 
     ngx_uint_t                      total_weight;
