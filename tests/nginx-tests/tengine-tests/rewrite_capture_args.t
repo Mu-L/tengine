@@ -1,5 +1,7 @@
 #!/usr/bin/perl
 
+# Copyright (C) 2026 Alibaba Group Holding Limited
+
 # Regression test for CVE-2026-42945.
 #
 # When a rewrite directive places a regex capture into the query-string

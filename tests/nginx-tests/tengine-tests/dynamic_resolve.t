@@ -1,6 +1,7 @@
 #!/usr/bin/perl
 
 # (C) Jason Liu
+# Copyright (C) 2014 Alibaba Group Holding Limited
 
 # Tests for dynamic resolve in upstream module.
 #

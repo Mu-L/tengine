@@ -1,5 +1,7 @@
 #!/usr/bin/perl
 
+# Copyright (C) 2026 Alibaba Group Holding Limited
+
 # Tests for rewrite module: heap buffer overflow with overlapping captures.
 # Regression test for CVE-2026-9256.
 
