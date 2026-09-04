@@ -42,6 +42,8 @@ EVENT_FOUND=NO
 EVENT_SELECT=NO
 EVENT_POLL=NO
 
+CONTROL_API=NO
+
 USE_THREADS=NO
 
 NGX_FILE_AIO=NO
@@ -73,6 +75,7 @@ HTTP_AUTH_REQUEST=YES
 HTTP_MIRROR=YES
 HTTP_USERID=YES
 HTTP_SLICE=NO
+HTTP_JSON=NO
 HTTP_AUTOINDEX=YES
 HTTP_RANDOM_INDEX=NO
 HTTP_STATUS=NO
@@ -246,6 +249,8 @@ do
 
         --with-file-aio)                 NGX_FILE_AIO=YES           ;;
 
+        --with-control-api)              CONTROL_API=YES            ;;
+
         --with-ipv6)
             NGX_POST_CONF_MSG="$NGX_POST_CONF_MSG
 $0: warning: the \"--with-ipv6\" option is deprecated"
@@ -284,6 +289,7 @@ $0: warning: the \"--with-ipv6\" option is deprecated"
         --with-http_secure_link_module)  HTTP_SECURE_LINK=YES       ;;
         --with-http_degradation_module)  HTTP_DEGRADATION=YES       ;;
         --with-http_slice_module)        HTTP_SLICE=YES             ;;
+        --with-http_json_module)         HTTP_JSON=YES              ;;
         --with-http_tunnel_module)       HTTP_TUNNEL=YES            ;;
 
         --without-http_charset_module)   HTTP_CHARSET=NO            ;;
@@ -513,6 +519,8 @@ cat << END
 
   --without-procs                    disable procs module
 
+  --with-control-api                 enable control API
+
   --with-threads                     enable thread pool support
 
   --with-file-aio                    enable file AIO support
@@ -539,6 +547,7 @@ cat << END
   --with-http_secure_link_module     enable ngx_http_secure_link_module
   --with-http_degradation_module     enable ngx_http_degradation_module
   --with-http_slice_module           enable ngx_http_slice_module
+  --with-http_json_module            enable ngx_http_json_module
   --with-http_tunnel_module          enable ngx_http_tunnel_module
   --with-http_stub_status_module     enable ngx_http_stub_status_module
 
