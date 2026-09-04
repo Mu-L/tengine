@@ -1,5 +1,7 @@
 #!/usr/bin/perl
 
+# Copyright (C) 2026 Alibaba Group Holding Limited
+
 # Tests for round robin when a re-resolvable upstream shrinks.
 #
 # The tengine round robin optimization (T_NGX_HTTP_UPSTREAM_RANDOM,

@@ -1,5 +1,7 @@
 #!/usr/bin/perl
 
+# Copyright (C) 2026 Alibaba Group Holding Limited
+
 # Tests for round robin with an empty re-resolvable upstream.
 #
 # The tengine round robin optimization (T_NGX_HTTP_UPSTREAM_RANDOM,
@@ -8,6 +10,11 @@
 # servers peers->number is zero before the first successful resolving and again
 # after an empty or negative answer, which used to abort the worker process:
 # either SIGFPE on "% peers->number", or SIGSEGV on the NULL peer list.
+#
+# The upstream with keepalive is here because the reported crashes came from
+# such a configuration: the keepalive module wraps the balancer, so the peer is
+# picked below get_keepalive_peer, and an idle connection kept in the pool
+# outlives the peer the resolver has just removed.
 
 ###############################################################################
 
@@ -29,7 +36,8 @@ use Test::Nginx;
 select STDERR; $| = 1;
 select STDOUT; $| = 1;
 
-my $t = Test::Nginx->new()->has(qw/http proxy upstream_zone/);
+my $t = Test::Nginx->new()
+	->has(qw/http proxy upstream_zone upstream_keepalive/);
 
 $t->write_file_expand('nginx.conf', <<'EOF');
 
@@ -56,6 +64,14 @@ http {
         server example.net:%%PORT_8081%% resolve max_fails=0 weight=2;
     }
 
+    # same as u, but the balancer is wrapped by the keepalive module and the
+    # connection pool caches connections by peer address
+    upstream uk {
+        zone zk 1m;
+        server example.net:%%PORT_8081%% resolve max_fails=0;
+        keepalive 4;
+    }
+
     # lower the retry timeout after empty reply
     resolver 127.0.0.1:%%PORT_8982_UDP%% valid=1s;
     # retry query shortly after DNS is started
@@ -74,6 +90,13 @@ http {
         location /uw {
             proxy_pass http://uw/t;
         }
+
+        # keepalive needs both to actually keep the connection
+        location /uk {
+            proxy_pass http://uk/t;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+        }
     }
 
     server {
@@ -82,6 +105,9 @@ http {
 
         location /t {
             root %%TESTDIR%%;
+
+            # tells whether the connection above was reused
+            add_header X-Connection $connection;
         }
     }
 }
@@ -93,14 +119,17 @@ port(8083);
 $t->write_file('t', 'SEE-THIS');
 
 $t->run_daemon(\&dns_daemon, $t)->waitforfile($t->testdir . '/' . port(8982));
-$t->try_run('no resolve in upstream server')->plan(9);
+$t->try_run('no resolve in upstream server')->plan(14);
 
 ###############################################################################
+
+my ($r, $n);
 
 # nothing resolved yet: the peer list is empty from the very first request
 
 like(http_get('/u'), qr/502/, 'not resolved');
 like(http_get('/uw'), qr/502/, 'not resolved weighted');
+like(http_get('/uk'), qr/502/, 'not resolved keepalive');
 
 # two peers, one of them is alive; both upstreams are usable now, and the
 # selected peer gets cached in peers->last_peer
@@ -111,6 +140,16 @@ like(http_get('/u'), qr/SEE-THIS/, 'resolved');
 like(http_get('/u'), qr/SEE-THIS/, 'resolved again');
 like(http_get('/uw'), qr/SEE-THIS/, 'resolved weighted');
 
+# the keepalive upstream leaves an idle connection in the pool, cached by the
+# address of the peer it was established to. The reuse below is asserted on
+# purpose: without it the steps that follow would run with an empty pool and
+# the keepalive upstream would be no different from u.
+
+like($r = http_get('/uk'), qr/SEE-THIS/, 'resolved keepalive');
+$r =~ m/X-Connection: (\d+)/;
+$n = defined $1 ? $1 : -1;
+like(http_get('/uk'), qr/X-Connection: $n.*SEE-THIS/ms, 'keepalive reused');
+
 # all records removed, peers->number drops back to zero while the cached
 # position still points to a removed peer
 
@@ -118,6 +157,7 @@ update_name();
 
 like(http_get('/u'), qr/502/, 'peers removed');
 like(http_get('/uw'), qr/502/, 'peers removed weighted');
+like(http_get('/uk'), qr/502/, 'peers removed keepalive');
 
 # and the upstreams recover once the name resolves again
 
@@ -125,10 +165,42 @@ update_name({A => '127.0.0.1'});
 
 like(http_get('/u'), qr/SEE-THIS/, 'peers restored');
 
+# the pooled connection survived the peer that was removed above, and the peer
+# added back has the same address, so it is handed out again
+
+like(http_get('/uk'), qr/SEE-THIS/, 'peers restored keepalive');
+
 # note: a peer set that changes while a peer selected earlier stays alive is
 # covered by nginx-tests/upstream_resolve.t ('A AAAA AAAA' steps), which also
 # checks that each peer is tried exactly once. Reproducing it here would depend
 # on which peer the ring scan happens to cache.
+
+# which branch is taken once peers->number reaches zero depends on the position
+# cached at that moment, that is on which peer of the previous answer was
+# selected last: the one past the end of the list, or one that still has a
+# successor. A single pass covers one of them, so repeat the cycle with answers
+# of a different length to reach both.
+
+for my $cycle (1 .. 5) {
+	update_name({A => $cycle % 2
+		? '127.0.0.1 127.0.0.201'
+		: '127.0.0.201 127.0.0.1 127.0.0.202'});
+
+	http_get('/u');
+	http_get('/uw');
+	http_get('/uk');
+
+	update_name();
+
+	http_get('/u');
+	http_get('/uw');
+	http_get('/uk');
+
+	if ($t->read_file('error.log') =~ /exited on signal|SEGV|Sanitizer/) {
+		diag("worker process crashed at cycle $cycle");
+		last;
+	}
+}
 
 unlike($t->read_file('error.log'), qr/exited on signal|SEGV|Sanitizer/,
 	'no worker process crash');

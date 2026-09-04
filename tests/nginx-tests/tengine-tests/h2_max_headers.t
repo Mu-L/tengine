@@ -1,5 +1,7 @@
 #!/usr/bin/perl
 
+# Copyright (C) 2026 Alibaba Group Holding Limited
+
 # Tests for HTTP/2 enforcement of the http core max_headers directive.
 #
 # Regression test for the "HTTP/2 Bomb" class of attack
