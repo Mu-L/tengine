@@ -40,8 +40,8 @@ sub new {
 		: 'PRI * HTTP/2.0' . CRLF . CRLF . 'SM' . CRLF . CRLF;
 
 	my $self = bless {
-		socket => $s, last_stream => -1,
 		buf => '',
+		socket => $s, last_stream => -1,
 		dynamic_encode => [ static_table() ],
 		dynamic_decode => [ static_table() ],
 		static_table_size => scalar @{[static_table()]},
