@@ -167,7 +167,6 @@ sub has_module($) {
 			=> '(?s)^(?!.*--without-http_upstream_zone_module)',
 		upstream_sticky
 			=> '(?s)^(?!.*--without-http_upstream_sticky)',
-		tunnel	=> '(?s)^(?!.*--without-http_tunnel_module)',
 		http	=> '(?s)^(?!.*--without-http(?!\S))',
 		cache	=> '(?s)^(?!.*--without-http-cache)',
 		pop3	=> '(?s)^(?!.*--without-mail_pop3_module)',
@@ -176,6 +175,7 @@ sub has_module($) {
 		pcre	=> '(?s)^(?!.*--without-pcre)',
 		split_clients
 			=> '(?s)^(?!.*--without-http_split_clients_module)',
+		tunnel	=> '(?s)^(?!.*--without-http_tunnel_module)',
 		stream	=> '--with-stream((?!\S)|=dynamic)',
 		stream_access
 			=> '(?s)^(?!.*--without-stream_access_module)',
@@ -277,20 +277,22 @@ sub has_feature($) {
 		return 0;
 	}
 
-	if ($feature =~ /^(openssl|libressl):([0-9.]+)/) {
+	if ($feature =~ /^(openssl|libressl):([0-9.]+)([a-z]*)/) {
 		my $library = $1;
 		my $need = $2;
+		my $patch = $3;
 
 		$self->{_configure_args} = `$NGINX -V 2>&1`
 			if !defined $self->{_configure_args};
 
 		return 0 unless
-			$self->{_configure_args} =~ /with $library ([0-9.]+)/i;
+			$self->{_configure_args}
+			=~ /with $library ([0-9.]+)([a-z]*)/i;
 
-		my @v = split(/\./, $1);
+		my @v = (split(/\./, $1), unpack("C*", $2));
 		my ($n, $v);
 
-		for $n (split(/\./, $need)) {
+		for $n (split(/\./, $need), unpack("C*", $patch)) {
 			$v = shift @v || 0;
 			return 0 if $n > $v;
 			return 1 if $v > $n;
@@ -866,6 +868,7 @@ sub http_start($;%) {
 	my $s;
 
 	my $port = $extra{SSL} ? 8443 : 8080;
+
 	eval {
 		local $SIG{ALRM} = sub { die "timeout\n" };
 		local $SIG{PIPE} = sub { die "sigpipe\n" };
@@ -877,6 +880,7 @@ sub http_start($;%) {
 			%extra
 		)
 			or die "Can't connect to nginx: $!\n";
+
 		if ($extra{SSL}) {
 			require IO::Socket::SSL;
 			IO::Socket::SSL->start_SSL(
@@ -886,8 +890,12 @@ sub http_start($;%) {
 				%extra
 			)
 				or die $IO::Socket::SSL::SSL_ERROR . "\n";
-			log_in("ssl cipher: " . $s->get_cipher());
-			log_in("ssl cert: " . $s->peer_certificate('issuer'));
+
+			if (!defined $extra{SSL_startHandshake}) {
+				log_in("ssl cipher: " . $s->get_cipher());
+				log_in("ssl cert: "
+					. $s->peer_certificate('issuer'));
+			}
 		}
 
 		log_out($request);
@@ -923,6 +931,7 @@ sub http_end($;%) {
 
 		local $/;
 		$reply = $s->getline();
+
 		$s->close();
 
 		alarm(0);
