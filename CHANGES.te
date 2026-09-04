@@ -135,6 +135,11 @@ Changes with Tengine 3.2.0                                         31 Jul 2026
     *) Bugfix: keep the resolver address order for dynamically resolved
        upstream peers (lianglli)
 
+    *) Bugfix: fixed crashes in the private round-robin optimizations when
+       "server ... resolve" added or removed peers at runtime: a division by
+       zero before the first successful resolution, and a stale cached
+       position mis-indexing the tried bitmap (lianglli)
+
     *) Bugfix: fixed ssl_protocols selection for virtual servers with SNI
        (lianglli)
 
